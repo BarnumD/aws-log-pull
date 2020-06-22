@@ -5,7 +5,7 @@ param (
   [string]$secretKey,
   [string]$logGroupName,
   [string]$region        = 'us-east-1',
-  [string]$startTime     = '0000000000001',# in epoch milliseconds
+  [string]$startTime     = '0000000000001',# In epoch milliseconds.  Generallly stored in GMT, so use GMT time in your query.
   [string]$configDir     = '/config',
   [switch]$jsonOut
 )

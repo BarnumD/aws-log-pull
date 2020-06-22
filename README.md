@@ -9,7 +9,7 @@ docker build -t aws-log-pull .
 ```
 
 ## Usage
-Start with a reasonable startTime (a couple of hours), or you'll be pulling lots of logs.  A cache will then be built of the last log event time.  You can then remove the startTime parameter and only pull the latest events.
+Start with a reasonable startTime (a couple of hours), or you'll be pulling lots of logs.  A cache will then be built of the last log event time.  You can then remove the startTime parameter and only pull the latest events. startTime should be queried in GMT time.
 ```
 docker run -v aws-log-pull-config:/config aws-log-pull ./Get-CloudWatchLogs.ps1 -accessKey [aws_access_key] -secretKey [aws_secret_key] -jsonout -startTime 1577883600000
 ```
