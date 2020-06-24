@@ -6,6 +6,7 @@ param (
   [string]$logGroupName,
   [string]$region        = 'us-east-1',
   [string]$startTime     = '0000000000001',# In epoch milliseconds.  Generallly stored in GMT, so use GMT time in your query.
+  [string]$endTime       = '',
   [string]$configDir     = '/config',
   [switch]$jsonOut
 )
@@ -15,12 +16,11 @@ param (
 Import-Module ./Functions/JSON-To-Hashtable.psm1
 Import-Module -Name AWSPowerShell
 
-$returnedEvents = @()
 $logGroups = @()
-$dateTimeNowEpoch = [Math]::Floor([decimal](Get-Date(Get-Date).ToUniversalTime()-uformat "%s"))
-$dateTimeBeforeEpoch = [Math]::Floor([decimal](Get-Date((Get-Date).AddHours(-24)).ToUniversalTime()-uformat "%s"))
+$dateTimeNowEpoch = [Math]::Floor([decimal](Get-Date(Get-Date).ToUniversalTime()-uformat "%s")) * 1000
 $cloudwatchLogState = @{"LastEventTimeByGroup" = @{}}
 $calculatedStartTime = $startTime
+$calculatedEndTime = If ($endTime) {$endTime} Else {$dateTimeNowEpoch}
 
 #We store last event timestamp information in a file so we can use it on subsequent runs.
 #Obtain the cached state file
@@ -47,7 +47,7 @@ If ($logGroupName){
 
 #Filter log events by date and return.
 ForEach ($logGroupName in $logGroups){
-  $nextToken = 'initial'
+  $nextToken = $null
 
   #Determine startTime.
   If ($startTime -eq '0000000000001'){ #No startTime was passed.  See if there is a cached startTime instead.
@@ -59,16 +59,10 @@ ForEach ($logGroupName in $logGroups){
     }
   }
 
-  $storedStartTime = $calculatedStartTime
-  While ($nextToken){
-    If ($nextToken -eq 'initial') {$nextToken = $null}
-    ForEach ($result in (Get-CWLFilteredLogEvent -LogGroupName $logGroupName -Region $region -AccessKey $accessKey -SecretKey $secretKey -NextToken $nextToken -StartTime $calculatedStartTime )){
-      $nextToken = $result.NextToken
-
+  Do {
+    ForEach ($result in (Get-CWLFilteredLogEvent -LogGroupName $logGroupName -Region $region -AccessKey $accessKey -SecretKey $secretKey -StartTime $calculatedStartTime -EndTime $calculatedEndTime -NextToken $nextToken)){
       #Tabulate each result into a table that we'll output later.
       ForEach ($event in $result.Events){
-        $calculatedStartTime = $event.TimeStamp + 1
-
         $returnedEvent = @{
           "LogGroupName"  = $logGroupName
           "LogStreamName" = $event.LogStreamName
@@ -94,9 +88,10 @@ ForEach ($logGroupName in $logGroups){
           $cloudwatchLogState.LastEventTimeByGroup["$logGroupName"] = $event.Timestamp
         }
       }
+
+      $nextToken = $result.NextToken
     }
-  }
-  $calculatedStartTime = $storedStartTime
+  } While ( $null -ne $nextToken )
 }
 
 #Output state to statefile
