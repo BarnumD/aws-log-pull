@@ -4,10 +4,11 @@ param (
   [string]$accessKey,
   [string]$secretKey,
   [string]$logGroupName,
-  [string]$region        = 'us-east-1',
-  [string]$startTime     = '0000000000001',# In epoch milliseconds.  Generallly stored in GMT, so use GMT time in your query.
-  [string]$endTime       = '',
-  [string]$configDir     = '/config',
+  [string]$region             = 'us-east-1',
+  [string]$startTime          = '',# In epoch milliseconds.  Generallly stored in GMT, so use GMT time in your query.
+  [string]$endTime            = '',
+  [string]$configDir          = '/config',
+  [string]$eventFilterPattern = $null,
   [switch]$jsonOut
 )
 
@@ -18,7 +19,7 @@ Import-Module -Name AWSPowerShell
 
 $logGroups = @()
 $dateTimeNowEpoch = [Math]::Floor([decimal](Get-Date(Get-Date).ToUniversalTime()-uformat "%s")) * 1000
-$cloudwatchLogState = @{"LastEventTimeByGroup" = @{}}
+$cloudwatchLogState = @{"LastEventTimeByHash" = @{}}
 $calculatedStartTime = $startTime
 $calculatedEndTime = If ($endTime) {$endTime} Else {$dateTimeNowEpoch}
 
@@ -26,6 +27,7 @@ $calculatedEndTime = If ($endTime) {$endTime} Else {$dateTimeNowEpoch}
 #Obtain the cached state file
 If (Test-Path "$configDir/cloudwatchlogs.statefile"){
   $cloudwatchLogState = (Get-Content "$configDir/cloudwatchlogs.statefile"| ConvertFrom-Json| ConvertTo-HashTable)
+  if (!$cloudwatchLogState['LastEventTimeByHash']){$cloudwatchLogState = @{"LastEventTimeByHash" = @{}}}
 }
 
 
@@ -49,18 +51,23 @@ If ($logGroupName){
 ForEach ($logGroupName in $logGroups){
   $nextToken = $null
 
+  #Create a hash of this query so we can use it in the cache to keep track of which queries we've run before or not.
+  $stringToHash = $region + $logGroupName + $eventFilterPattern
+  $queryPatternHash = ([System.BitConverter]::ToString((New-Object -TypeName System.Security.Cryptography.SHA1CryptoServiceProvider).ComputeHash((New-Object -TypeName System.Text.UTF8Encoding).GetBytes($stringToHash)))).Replace("-","")
+
   #Determine startTime.
-  If ($startTime -eq '0000000000001'){ #No startTime was passed.  See if there is a cached startTime instead.
-    If (($cloudwatchLogState) -And ($cloudwatchLogState.LastEventTimeByGroup) -And ($cloudwatchLogState.LastEventTimeByGroup."$logGroupName")){
+  If ($startTime -eq ''){ #No startTime was passed.  See if there is a cached startTime instead.
+    If (($cloudwatchLogState) -And ($cloudwatchLogState.LastEventTimeByHash) -And ($cloudwatchLogState.LastEventTimeByHash."$queryPatternHash")){
       #Found a valid start time from cache.  Add one second.
-      $calculatedStartTime = (($cloudwatchLogState.LastEventTimeByGroup."$logGroupName") + 1).tostring()
+      $calculatedStartTime = (($cloudwatchLogState.LastEventTimeByHash."$queryPatternHash") + 1).tostring()
     }else{
-      #There was no valid cache.  Use default start time.
+      #There was no valid cache.  Set a default start time of 1 day ago.
+      $calculatedStartTime = [Math]::Floor([decimal](Get-Date((Get-Date).AddDays(-1)).ToUniversalTime()-uformat "%s")) * 1000
     }
   }
 
   Do {
-    ForEach ($result in (Get-CWLFilteredLogEvent -LogGroupName $logGroupName -Region $region -AccessKey $accessKey -SecretKey $secretKey -StartTime $calculatedStartTime -EndTime $calculatedEndTime -NextToken $nextToken)){
+    ForEach ($result in (Get-CWLFilteredLogEvent -LogGroupName $logGroupName -Region $region -AccessKey $accessKey -SecretKey $secretKey -FilterPattern $eventFilterPattern -StartTime $calculatedStartTime -EndTime $calculatedEndTime -NextToken $nextToken)){
       #Tabulate each result into a table that we'll output later.
       ForEach ($event in $result.Events){
         $returnedEvent = @{
@@ -80,12 +87,12 @@ ForEach ($logGroupName in $logGroups){
         }
 
         #Update the state with the timestamp of this event.
-        if ($cloudwatchLogState.LastEventTimeByGroup."$logGroupName"){
-          If ($event.Timestamp -gt $cloudwatchLogState.LastEventTimeByGroup."$logGroupName"){
-            $cloudwatchLogState.LastEventTimeByGroup."$logGroupName" = $event.Timestamp
+        if ($cloudwatchLogState.LastEventTimeByHash."$queryPatternHash"){
+          If ($event.Timestamp -gt $cloudwatchLogState.LastEventTimeByHash."$queryPatternHash"){
+            $cloudwatchLogState.LastEventTimeByHash."$queryPatternHash" = $event.Timestamp
           }
         }else{
-          $cloudwatchLogState.LastEventTimeByGroup["$logGroupName"] = $event.Timestamp
+          $cloudwatchLogState.LastEventTimeByHash["$queryPatternHash"] = $event.Timestamp
         }
       }
 
